@@ -1,0 +1,133 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chiton shell-eye optics</title><style>
+:root {--foreground:#292d30;--background:#fff;--muted:#e8e8ea;--border:#d9dade;--muted-foreground:#73777a;--viz-series-1:#359bff;--viz-series-2:#fc8534;--viz-series-3:#47bc77}
+*{box-sizing:border-box}body{margin:0 auto;padding:24px;max-width:960px;font:15px/1.5 Aptos,Arial,sans-serif;color:var(--foreground);background:var(--background)}
+h3{font-size:20px;font-weight:600;margin:0 0 16px}.viz-controls{display:flex;flex-wrap:wrap;gap:10px 16px;margin-bottom:10px}.form-label{display:flex;flex-direction:column;flex:1 1 260px;gap:4px}.form-select,.btn{font:inherit;border:1px solid var(--border);border-radius:5px;padding:5px 10px;background:var(--background);color:var(--foreground)}.form-range{width:100%;accent-color:#5c6269}.btn{cursor:pointer}.btn:disabled{opacity:.4}.text-small{font-size:12px}.tabular-nums{font-variant-numeric:tabular-nums}[hidden]{display:none!important}summary{cursor:pointer}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+</style><body><div id="chiton-lab">
+<style>
+#chiton-lab {color:var(--foreground)}
+#chiton-lab .outputs {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:16px}
+#chiton-lab figure {margin:0;min-width:0} #chiton-lab figcaption {margin-bottom:8px}
+#chiton-lab canvas {width:100%;height:auto;display:block}
+#chiton-lab .rayview {width:100%;display:block;margin-top:12px}
+#chiton-lab .status {margin:12px 0}
+#chiton-lab details {margin-top:12px}
+#chiton-lab .legend {display:flex;gap:18px;flex-wrap:wrap;margin-top:8px}
+#chiton-lab .swatch {display:inline-block;width:22px;height:2px;vertical-align:middle;margin-right:6px;background:var(--viz-series-1)}
+#chiton-lab .second {background:var(--viz-series-2)}
+@media(max-width:440px){#chiton-lab .outputs {grid-template-columns:1fr} #chiton-lab figure {max-width:280px;width:100%;margin:auto}}
+</style>
+<h3>虚拟石鳖 · 光路与接收图案</h3>
+<div class="viz-controls">
+<label class="form-label">演示模型<select class="form-select" data-key="model"><option value="paraxial">近轴厚透镜 · ABCD</option><option value="snell">球面光线追迹 · Snell</option><option value="dual">双通道叠加 · 标量近似</option></select></label>
+<label class="form-label">外部介质<select class="form-select" data-key="medium"><option value="water">海水 · n = 1.336</option><option value="air">空气 · n = 1.000</option></select></label>
+<label class="form-label">目标图案<select class="form-select" data-key="pattern"><option value="fish">鱼形剪影</option><option value="stripes">条纹</option><option value="checker">棋盘格</option><option value="point">点光源</option></select></label>
+<label class="form-label" data-index-label>透镜折射率<select class="form-select" data-key="index"><option value="1.68">1.68 · 高折射率近似</option><option value="1.53">1.53 · 低折射率近似</option></select></label>
+</div>
+<div class="viz-controls">
+<label class="form-label"><span>接收面距后顶点 <span data-val="depth" class="tabular-nums"></span> µm</span><input class="form-range" type="range" data-key="depth" min="0" max="100" step="0.5"></label>
+<label class="form-label"><span>追迹物点角度 <span data-val="angle" class="tabular-nums"></span>°</span><input class="form-range" type="range" data-key="angle" min="-12" max="12" step="0.5"></label>
+</div>
+<div class="viz-row"><button class="btn" type="button" data-focus>移到近轴焦面</button></div>
+<svg class="rayview" role="img" aria-label="所选物点的子午面光线，透镜与可移动接收面"></svg>
+<div class="legend text-small"><span><i class="swatch"></i><span data-legend>追迹光线</span></span><span data-dual hidden><i class="swatch second"></i>n = 1.68（虚线）</span><span>● 轴上近轴焦点</span><span>阴影：感光区轴向范围（非平面视网膜）</span></div>
+<div class="outputs">
+<figure><figcaption>物体 · 48° 视场</figcaption><canvas data-canvas="source" width="192" height="192" role="img" aria-label="作为输入的目标图案"></canvas></figure>
+<figure><figcaption>接收面 · 连续光强</figcaption><canvas data-canvas="image" width="192" height="192" role="img" aria-label="光线模型计算的接收面图案"></canvas></figure>
+<figure><figcaption>理想感光器采样</figcaption><canvas data-canvas="sample" width="192" height="192" role="img" aria-label="接收面图案经六角阵列采样"></canvas></figure>
+</div>
+<div class="status text-small tabular-nums" aria-live="polite" data-status></div>
+<details><summary>孔径与采样</summary><div class="viz-controls">
+<label class="form-label"><span>模型孔径直径 <span data-val="aperture"></span> µm</span><input class="form-range" type="range" data-key="aperture" min="4" max="28" step="1"></label>
+<label class="form-label"><span>采样中心间距 <span data-val="pitch"></span> µm</span><input class="form-range" type="range" data-key="pitch" min="3" max="12" step="0.5"></label>
+</div></details>
+</div>
+<script>
+(()=>{
+const root=document.getElementById('chiton-lab'), q=s=>root.querySelector(s);
+const defaults={model:'dual',medium:'water',pattern:'fish',index:1.53,depth:12.5,angle:0,aperture:12,pitch:4};
+let state={...defaults},pending=false,lastMetrics={};
+const N=192,field=80,rad=Math.PI/180;
+const canvases=Object.fromEntries(['source','image','sample'].map(k=>[k,q(`[data-canvas="${k}"]`)]));
+function restore(saved){const s=saved?.modelContent?.settings;if(!s)return;for(const k of Object.keys(defaults))if(typeof s[k]===typeof defaults[k])state[k]=s[k];
+for(const [k,lo,hi] of [['depth',0,100],['angle',-12,12],['aperture',4,28],['pitch',3,12],['index',1.53,1.68]])state[k]=Math.max(lo,Math.min(hi,state[k]));
+if(!['paraxial','snell','dual'].includes(state.model))state.model='paraxial';if(!['water','air'].includes(state.medium))state.medium='water';if(!['fish','stripes','checker','point'].includes(state.pattern))state.pattern='fish';}
+try { restore(JSON.parse(localStorage.getItem('chiton-settings'))); } catch (_) {}
+function mat(n){const ne=state.medium==='water'?1.336:1,ni=1.336,p1=(n-ne)/18,p2=(ni-n)/-43,b=48/n;
+const A=1-b*p1,B=b,C=-p2*A-p1,D=1-p2*b;return {A,B,C,D,ne,ni,f:-ni*A/C,g:(B+state.depth/ni*D)*ne,k:A+state.depth/ni*C};}
+function refract(d,n,n1,n2){let c=-d.reduce((s,v,i)=>s+v*n[i],0);if(c<0){n=n.map(v=>-v);c=-c;}const e=n1/n2,k=1-e*e*(1-c*c);if(k<0)return null;return d.map((v,i)=>e*v+(e*c-Math.sqrt(k))*n[i]);}
+function ray(n,y,z,angle=0){const ne=state.medium==='water'?1.336:1;
+let p=[18-Math.sqrt(324-y*y-z*z),y,z],d=[Math.cos(angle),-Math.sin(angle),0],start=p.map((v,i)=>v-d[i]*30);
+const d1=refract(d,[(p[0]-18)/18,y/18,z/18],ne,n);if(!d1)return null;
+const v=[p[0]-5,p[1],p[2]],b=v.reduce((s,x,i)=>s+x*d1[i],0),c=v.reduce((s,x)=>s+x*x,0)-1849,disc=b*b-c;if(disc<0)return null;
+const t=-b+Math.sqrt(disc);if(t<=0)return null;const p2=p.map((x,i)=>x+t*d1[i]);if(Math.hypot(p2[1],p2[2])>17.8)return null;
+const d2=refract(d1,[(p2[0]-5)/43,p2[1]/43,p2[2]/43],n,1.336);if(!d2||d2[0]<=0)return null;
+const end=p2.map((x,i)=>x+(48+state.depth-p2[0])/d2[0]*d2[i]);return {start,p,p2,end};}
+function channels(){return (state.model==='dual'?[1.53,1.68]:[state.index]).map(n=>{
+const m=mat(n),pts=[];let g=m.g;
+if(state.model==='snell'){const r=ray(n,0,0,.0001);if(r)g=-r.end[1]/.0001;}
+for(let i=0;i<80;i++){const r=state.aperture/2*Math.sqrt((i+.5)/80),phi=i*2.399963229728653,y=r*Math.cos(phi),z=r*Math.sin(phi);
+if(state.model==='snell'){const p=ray(n,y,z);if(p)pts.push([p.end[1],p.end[2]]);}else pts.push([m.k*y,m.k*z]);}
+return {n,m,g,pts,rms:Math.sqrt(pts.reduce((s,p)=>s+p[0]*p[0]+p[1]*p[1],0)/pts.length)};});}
+function target(x,y){if(Math.abs(x)>24||Math.abs(y)>24)return state.pattern==='point'?0:1;
+if(state.pattern==='stripes')return .5+.45*Math.cos(2*Math.PI*x/6);
+if(state.pattern==='checker')return (Math.floor((x+24)/6)+Math.floor((y+24)/6))%2?.1:1;
+if(state.pattern==='point')return Math.exp(-(x*x+y*y)/.35);
+const body=(x-1)**2/144+y*y/36<1,tail=x>-19&&x<-8&&Math.abs(y)<(-x-8)*.7,fin=(x>-5&&x<3&&y>3&&y<9-Math.abs(x+1))||(x>-2&&x<6&&y<-3&&y>-9+Math.abs(x-2));
+const eye=(x-8)**2+(y-2)**2<1;return eye?1:(body||tail||fin?.08:1);}
+const swatch=document.createElement('span');swatch.hidden=true;root.appendChild(swatch);
+function rgb(token){swatch.style.color=`var(${token})`;const c=document.createElement('canvas').getContext('2d');c.fillStyle=getComputedStyle(swatch).color;c.fillRect(0,0,1,1);return [...c.getImageData(0,0,1,1).data].slice(0,3);}
+function palette(){const bg=rgb('--background'),fg=rgb('--foreground');return {bg,fg,mix:v=>fg.map((x,i)=>Math.round(x*(1-v)+bg[i]*v)),css:v=>`rgb(${fg.map((x,i)=>Math.round(x*(1-v)+bg[i]*v)).join(',')})`};}
+function pixels(canvas,values,circular,p){const c=canvas.getContext('2d'),im=c.createImageData(N,N);for(let j=0;j<N;j++)for(let i=0;i<N;i++){const k=j*N+i,rr=(i+.5-N/2)**2+(j+.5-N/2)**2,col=p.mix(values[k]);im.data.set([...col,circular&&rr>(N*.47)**2?0:255],4*k);}c.putImageData(im,0,0);}
+function images(ch){const p=palette(),src=new Float32Array(N*N),out=new Float32Array(N*N);
+for(let j=0;j<N;j++)for(let i=0;i<N;i++){const k=j*N+i;src[k]=target((i+.5-N/2)*48/N,(N/2-j-.5)*48/N);const x=(i+.5-N/2)*field/N,y=(N/2-j-.5)*field/N;let sum=0;
+for(const c of ch){let s=0;for(const [dy,dx] of c.pts)s+=target(-(x-dx)/c.g/rad,-(y-dy)/c.g/rad);sum+=c.pts.length?s/c.pts.length:0;}out[k]=sum/ch.length;}
+pixels(canvases.source,src,false,p);pixels(canvases.image,out,true,p);
+const ctx=canvases.sample.getContext('2d');ctx.clearRect(0,0,N,N);ctx.save();ctx.beginPath();ctx.arc(N/2,N/2,N*.47,0,Math.PI*2);ctx.clip();
+const side=state.pitch/Math.sqrt(3),scale=N/field;let count=0;
+for(let col=-20;col<=20;col++)for(let row=-20;row<=20;row++){const x=col*1.5*side,y=(row+(col%2)/2)*state.pitch;if(Math.hypot(x,y)>field*.47+side)continue;
+let sum=0,num=0;for(let k=0;k<13;k++){const r=k?side*.65:0,a=k*Math.PI/6,ii=Math.round(N/2+(x+r*Math.cos(a))*scale),jj=Math.round(N/2-(y+r*Math.sin(a))*scale);if(ii>=0&&ii<N&&jj>=0&&jj<N){sum+=out[jj*N+ii];num++;}}
+ctx.fillStyle=p.css(num?sum/num:1);ctx.beginPath();for(let k=0;k<6;k++){const a=k*Math.PI/3,xx=N/2+(x+side*Math.cos(a))*scale,yy=N/2-(y+side*Math.sin(a))*scale;k?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy);}ctx.closePath();ctx.fill();if(Math.hypot(x,y)<field*.47)count++;}ctx.restore();
+for(const key of ['image','sample']){const c=canvases[key].getContext('2d');c.strokeStyle=p.css(.8);c.lineWidth=.7;c.beginPath();c.arc(N/2,N/2,N*.47,0,Math.PI*2);c.stroke();c.strokeStyle=p.css(0);c.lineWidth=2;c.beginPath();c.moveTo(N-55,N-5);c.lineTo(N-7,N-5);c.stroke();}
+lastMetrics.sampleCount=count;
+}
+function rays(ch){const svg=q('.rayview'),w=Math.max(280,svg.clientWidth),h=w<450?210:250,x0=18,x1=w-20,X=x=>x0+(x+30)/190*(x1-x0),scale=(x1-x0)/190,Y=y=>h*.5-y*scale;
+let s=`<title>模型光路：透镜前后顶点间距48微米</title><defs><clipPath id="chiton-ray-clip"><rect x="0" y="26" width="${w}" height="${h-52}"/></clipPath></defs>`;
+const line=(a,b,color,dash='')=>`<path d="M${X(a[0])},${Y(a[1])} L${X(b[0])},${Y(b[1])}" stroke="${color}" stroke-width="1.3" fill="none" ${dash?'stroke-dasharray="'+dash+'"':''}/>`;
+s+=line([-30,0],[160,0],'var(--border)');
+// Speiser et al. 2011, Fig. 4C–D: rhabdom-filled region extends
+// immediately below the lens to ~25 µm. An axial envelope, not a retinal sheet.
+// The present model shares that paper's 48 µm lens geometry; no L2-based
+// distances from Li et al. 2015 are overlaid on this rear-vertex coordinate.
+s+=`<rect x="${X(48)}" y="68" width="${X(73)-X(48)}" height="${h-110}" fill="var(--viz-series-3)" opacity="0.12"/>`;
+s+=`<path d="M${X(48)},64v-6H${X(73)}v6" stroke="var(--muted-foreground)" fill="none"/>`;
+s+=`<text x="${X(60.5)}" y="40" text-anchor="middle" fill="var(--foreground)" class="text-small">感光区 ≈ 0–25 µm</text>`;
+s+=`<text x="${X(60.5)}" y="54" text-anchor="middle" fill="var(--muted-foreground)" class="text-small">Speiser et al., 2011</text>`;
+let pts=[];for(let y=-17.5;y<=17.5;y+=.5)pts.push([18-Math.sqrt(324-y*y),y]);for(let y=17.5;y>=-17.5;y-=.5)pts.push([5+Math.sqrt(1849-y*y),y]);
+s+=`<path d="${pts.map((p,i)=>(i?'L':'M')+X(p[0])+','+Y(p[1])).join(' ')}Z" fill="var(--muted)" stroke="var(--border)"/>`;
+s+='<g clip-path="url(#chiton-ray-clip)">';
+ch.forEach((c,ci)=>{const color=`var(--viz-series-${ci+1})`;for(let i=-3;i<=3;i++){const y=i/3*state.aperture/2,theta=-state.angle*rad;let p;
+if(state.model==='snell'){const r=ray(c.n,y,0,state.angle*rad);if(!r)continue;p=[r.start,r.p,r.p2,r.end];}
+else {const u=c.m.ne*theta,u1=u-(c.n-c.m.ne)/18*y,y2=y+48/c.n*u1;p=[[-30,y-30*theta],[0,y],[48,y2],[48+state.depth,c.m.k*y+c.m.g*theta]];}
+for(let k=0;k<p.length-1;k++)s+=line(p[k],p[k+1],color,ci?'4 3':'');}
+});s+='</g>';
+ch.forEach((c,ci)=>{const fx=X(48+c.m.f);s+=`<circle cx="${fx}" cy="${Y(0)}" r="4" fill="var(--viz-series-${ci+1})"><title>轴上近轴后焦距 ${c.m.f.toFixed(2)} µm；${c.m.f>=0&&c.m.f<=25?'位于':'超出'}约 0–25 µm 参考区间</title></circle>`;});
+s+=`<path d="M${X(48+state.depth)},68V${h-36}" stroke="var(--foreground)" stroke-width="1.3"/>`;
+const text=(x,y,t,anchor='middle')=>`<text x="${x}" y="${y}" text-anchor="${anchor}" fill="var(--foreground)" class="text-small">${t}</text>`;
+s+=text(X(24),20,'透镜');s+=text(Math.min(w-4,Math.max(44,X(48+state.depth))),h-12,'接收面');
+s+=`<path d="M${X(130)},${h-10}h${20*scale}" stroke="var(--foreground)" stroke-width="2"/>`;s+=text(X(140),h-19,'20 µm');
+svg.setAttribute('viewBox',`0 0 ${w} ${h}`);svg.innerHTML=s;}
+function sync(){for(const el of root.querySelectorAll('[data-key]'))el.value=state[el.dataset.key];for(const el of root.querySelectorAll('[data-val]'))el.textContent=state[el.dataset.val];q('[data-index-label]').hidden=state.model==='dual';q('[data-dual]').hidden=state.model!=='dual';q('[data-legend]').textContent=state.model==='dual'?'n = 1.53（实线）':'追迹光线';}
+function render(){pending=false;sync();const ch=channels();lastMetrics={foci:ch.map(c=>Number(c.m.f.toFixed(2))),rms:ch.map(c=>Number(c.rms.toFixed(2)))};rays(ch);images(ch);const valid=ch[0].m.f>=0&&ch[0].m.f<=100;q('[data-focus]').disabled=!valid;
+q('[data-status]').textContent=`接收面 ${state.depth<=25?'位于':'超出'}约 0–25 µm 解剖参考区间 · 近轴后焦距 ${ch.map(c=>c.m.f.toFixed(1)).join(' / ')} µm${ch.some(c=>c.m.f<0)?'（负值：后表面外无实焦点）':''} · 轴上 RMS 光斑 ${ch.map(c=>c.rms.toFixed(1)).join(' / ')} µm · 图像标尺 20 µm · ${state.model==='dual'?'非完整双轴晶体模型':state.model==='snell'?'轴上 PSF 的局部成像近似':'几何近轴模型'}`;
+root.__optics={state:{...state},metrics:{...lastMetrics},matrix:mat(state.index)};}
+function save(){try {localStorage.setItem('chiton-settings',JSON.stringify({modelContent:{settings:{...state},metrics:{...lastMetrics}}}));} catch (_) {}}
+function update(){if(!pending){pending=true;requestAnimationFrame(()=>{render();save();});}}
+root.addEventListener('input',e=>{const k=e.target.dataset.key;if(!k)return;state[k]=typeof defaults[k]==='number'?Number(e.target.value):e.target.value;update();});
+q('[data-focus]').addEventListener('click',()=>{state.depth=Math.round(mat(state.model==='dual'?1.53:state.index).f*2)/2;update();});
+
+new ResizeObserver(()=>rays(channels())).observe(q('.rayview'));
+new MutationObserver(()=>render()).observe(document.documentElement,{attributes:true,attributeFilter:['class','style','data-theme']});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>render());render();
+})();
+</script>
+</body></html>
